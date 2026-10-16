@@ -13,8 +13,28 @@
     // ขนาดของชิ้นส่วนไฟล์ (Chunk) 64 KB เพื่อความเสถียรบนมือถือ
     chunkSize: 65536,
     // รหัส Prefix ป้องกันชื่อห้องชนกับโปรเจกต์อื่น
-    roomPrefix: 'dropshare-v2-'
+    roomPrefix: 'dropshare-v2-',
+    peerServer: {
+      host: '0.peerjs.com',
+      port: 443,
+      path: '/',
+      secure: true
+    }
   };
+
+  function peerOptions() {
+    return {
+      ...CONFIG.peerServer,
+      debug: 1,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' }
+        ]
+      }
+    };
+  }
 
   // ==========================================================
   //  ตัวช่วยทั่วไป (UTILITY HELPERS)
@@ -208,7 +228,7 @@
       this._destroyPeer();
 
       try {
-        this.peer = new Peer(peerId);
+        this.peer = new Peer(peerId, peerOptions());
       } catch (err) {
         console.error(err);
         Toast.error('ไม่สามารถสร้างห้องส่งไฟล์ได้ กรุณาลองใหม่อีกครั้ง');
@@ -218,6 +238,8 @@
       this.peer.on('open', (id) => {
         console.log('[Host] ห้องพร้อมแล้ว ID:', id);
       });
+
+      this._watchSignalingConnection(this.peer, 'Host');
 
       // เมื่อมีเครื่องอื่น (ผู้รับ) กดเชื่อมต่อเข้ามา
       this.peer.on('connection', (conn) => {
@@ -271,7 +293,7 @@
 
       try {
         // ผู้รับสุ่ม ID ตัวเอง แล้วต่อหา Host
-        this.peer = new Peer();
+        this.peer = new Peer(peerOptions());
       } catch (err) {
         Toast.error('ไม่สามารถเปิดใช้งาน WebRTC ได้');
         UI.hide('join-spinner');
@@ -288,6 +310,8 @@
         this._setupConnectionHandlers(conn);
       });
 
+      this._watchSignalingConnection(this.peer, 'Joiner');
+
       this.peer.on('error', (err) => {
         console.warn('[Joiner Error]', err);
         UI.hide('join-spinner');
@@ -297,6 +321,26 @@
     },
 
     // ---- 3. การจัดการการเชื่อมต่อ WEBRTC P2P ----
+
+    _watchSignalingConnection(peer, role) {
+      peer.on('disconnected', () => {
+        if (this.peer !== peer || peer.destroyed) return;
+
+        console.warn(`[${role}] หลุดจาก PeerJS signaling server; กำลังลองเชื่อมต่อใหม่`);
+        Toast.info('การเชื่อมต่อเซิร์ฟเวอร์จับคู่หลุด กำลังเชื่อมต่อใหม่…');
+
+        // Reconnect with the same peer ID so the room remains joinable.
+        setTimeout(() => {
+          if (this.peer !== peer || peer.destroyed || !peer.disconnected) return;
+          try {
+            peer.reconnect();
+          } catch (err) {
+            console.error(`[${role}] เชื่อมต่อ signaling server กลับไม่สำเร็จ`, err);
+            Toast.error('เชื่อมต่อเซิร์ฟเวอร์จับคู่ไม่ได้ กรุณาลองเริ่มใหม่');
+          }
+        }, 1000);
+      });
+    },
 
     _setupConnectionHandlers(conn) {
       conn.on('open', () => {
